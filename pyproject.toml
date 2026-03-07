@@ -1,0 +1,26 @@
+[project]
+name = "bnet2hoa"
+version = "0.1.0"
+description = "Generate the state space of a Boolean network in HOA format"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "msgspec>=0.20.0",
+]
+
+
+[project.scripts]
+bnet2hoa = "bnet2hoa.main:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.151.5",
+    "isort>=7.0.0",
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+]
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
