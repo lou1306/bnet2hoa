@@ -156,9 +156,13 @@ def main():
 
     bnet = which("BNetToPrime")
     if bnet is None:
-        try:
-            bnet = resources.files("vendor").joinpath("BNetToPrime")
-        except FileNotFoundError:
+        bnet_path = [
+            "bnet2hoa", "data",
+            "BNetToPrime-macos" if sys.platform == "darwin" else "BNetToPrime"]
+        if resources.is_resource(*bnet_path) and sys.platform != "win32":
+            with resources.path(*bnet_path) as bnet_path:
+                bnet = bnet_path
+        else:
             print("BNetToPrime binary not found.")
             sys.exit(1)
     with tempfile.NamedTemporaryFile(suffix=".bnet", delete=False) as tmp:
