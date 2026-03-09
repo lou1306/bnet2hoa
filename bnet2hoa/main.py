@@ -135,10 +135,23 @@ def main():
     parser = argparse.ArgumentParser(
         prog="bnet2hoa",
         description="Generate the state space of a Boolean network in HOA format")  # noqa: E501
-    parser.add_argument("bnet_file", help="Path to a .bnet file")
+    parser.add_argument("bnet_file", help="path to a .bnet file")
     parser.add_argument(
         "--allow-stuttering", action="store_true",
-        help="Allow stuttering transitions (default: False)")
+        help="allow stuttering transitions (default: False)")
+    parser.add_argument(
+        '--start', type=int, action='append', default=[],
+        help=(
+            "specify one or more start state. "
+            "Use -1 to omit the 'Start:' header entirely. "
+            "Notice that this results in an empty automaton per the HOA specification. "  # noqa: E501
+            "May be specified multiple times (default: all states)"))
+    parser.add_argument(
+        '--state', type=int, action='append', default=[],
+        help=(
+            "state to be included in the output. "
+            "Use -1 to print only the header. "
+            "May be specified multiple times (default: all states)"))
     args = parser.parse_args()
 
     bnet = which("BNetToPrime")
@@ -156,24 +169,42 @@ def main():
             out = tmp.read().decode("utf-8").strip()
         os.unlink(tmp.name)
     primes = json.decode(out)
-
     aps = primes.keys()
+    num_states = 2 ** len(aps)
     print("HOA: v1")
     print("AP:", len(aps), " ".join(f'"{ap}"' for ap in aps))
-    print("States:", 2 ** len(aps))
-    for i in range(2 ** len(aps)):
-        print("Start:", i)
+    print("States:", num_states)
+    if -1 not in args.start:
+        start_states = args.start if args.start else range(num_states)
+        for i in start_states:
+            if i < 0 or i >= num_states:
+                print(
+                    f"[WARNING] Skipping invalid start state: {i}",
+                    file=sys.stderr)
+                continue
+            print("Start:", i)
     print("Acceptance: 0 t")
     print("--BODY--")
+    if -1 in args.state:
+        print("--END--")
+        return
 
     worker = get_worker_fn(primes, allow_stuttering=args.allow_stuttering)
-    for state in range(2 ** len(aps)):
+    states = args.state if args.state else range(num_states)
+    if len(states) > 2*24:
+        print(
+            f"[WARNING] Automaton may have up to {len(states):.2e} states.",
+            file=sys.stderr)
+
+    for state in states:
+        if state < 0 or state >= num_states:
+            print(f"[WARNING] Skipping invalid state: {state}", file=sys.stderr)
+            continue
         tr = worker(state)
         print(f'State: {state} "{int_to_bin(state, list(aps))}"')
         for next_state, guard in tr.items():
             print(f'[{guard}] {next_state}')
     print("--END--")
-
 
 if __name__ == "__main__":
     main()
