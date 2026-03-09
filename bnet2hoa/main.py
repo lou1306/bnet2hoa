@@ -11,11 +11,6 @@ from shutil import which
 from msgspec import json
 
 
-def powerset(iterable):
-    s = list(iterable)
-    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
-
-
 def get_eval_state_fn(primes: dict) -> Callable[[dict], dict]:
     aps = set(primes.keys())
 
@@ -87,6 +82,10 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
     all_aps = list(primes.keys())
     ap_index = {ap: i for i, ap in enumerate(all_aps)}
 
+    def powerset(iterable):
+        s = list(iterable)
+        return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
     def worker(state: int) -> dict:
         trel = {}
 
@@ -131,6 +130,29 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
     return worker
 
 
+def get_primes(bnet_file: str) -> dict:
+    bnet = which("BNetToPrime")
+    if bnet is None:
+        bnet_path = [
+            "bnet2hoa", "data",
+            "BNetToPrime-macos" if sys.platform == "darwin" else "BNetToPrime"]
+        if resources.is_resource(*bnet_path) and sys.platform != "win32":
+            with resources.path(*bnet_path) as bnet_path:
+                bnet = bnet_path
+        else:
+            print("BNetToPrime binary not found.")
+            sys.exit(1)
+    with tempfile.NamedTemporaryFile(suffix=".bnet", delete=False) as tmp:
+        tmp.close()
+        run([str(bnet), bnet_file, tmp.name], stdout=sys.stderr, check=True)  # noqa: E501
+        print(file=sys.stderr)
+        with open(tmp.name, "rb") as tmp:
+            out = tmp.read().decode("utf-8").strip()
+        os.unlink(tmp.name)
+    primes = json.decode(out)
+    return primes
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="bnet2hoa",
@@ -153,27 +175,8 @@ def main():
             "Use -1 to print only the header. "
             "May be specified multiple times (default: all states)"))
     args = parser.parse_args()
-
-    bnet = which("BNetToPrime")
-    if bnet is None:
-        bnet_path = [
-            "bnet2hoa", "data",
-            "BNetToPrime-macos" if sys.platform == "darwin" else "BNetToPrime"]
-        if resources.is_resource(*bnet_path) and sys.platform != "win32":
-            with resources.path(*bnet_path) as bnet_path:
-                bnet = bnet_path
-        else:
-            print("BNetToPrime binary not found.")
-            sys.exit(1)
-    with tempfile.NamedTemporaryFile(suffix=".bnet", delete=False) as tmp:
-        tmp.close()
-        run([str(bnet), args.bnet_file, tmp.name], stdout=sys.stderr, check=True)  # noqa: E501
-        print(file=sys.stderr)
-        with open(tmp.name, "rb") as tmp:
-            out = tmp.read().decode("utf-8").strip()
-        os.unlink(tmp.name)
-    primes = json.decode(out)
-    aps = primes.keys()
+    primes = get_primes(args.bnet_file)
+    aps = tuple(primes.keys())
     num_states = 2 ** len(aps)
     print("HOA: v1")
     print("AP:", len(aps), " ".join(f'"{ap}"' for ap in aps))
@@ -205,7 +208,7 @@ def main():
             print(f"[WARNING] Skipping invalid state: {state}", file=sys.stderr)
             continue
         tr = worker(state)
-        print(f'State: {state} "{int_to_bin(state, list(aps))}"')
+        print(f'State: {state} "{int_to_bin(state, aps)}"')
         for next_state, guard in tr.items():
             print(f'[{guard}] {next_state}')
     print("--END--")
