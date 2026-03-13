@@ -8,7 +8,30 @@ from subprocess import run
 from typing import Callable
 from shutil import which
 
+
 from msgspec import json
+from sympy.utilities.autowrap import autowrap
+
+from .bnet import bnet2sympy
+
+
+def get_eval_int_fn_bnet(bnet_file: str) -> tuple[Callable[[int], int], tuple]:
+    functions, symbols = bnet2sympy(bnet_file)
+    n = len(symbols)
+    compiled = {
+        target: autowrap(factors, args=symbols, backend="cython")
+        for target, factors in functions.items()}
+
+    def eval_int(state: int) -> int:
+        new_state = state
+        valuation = [bool((state >> (n - j - 1)) & 1) for j in range(n)]
+        for i, ap in enumerate(symbols):
+            if compiled[ap](*valuation):
+                new_state |= (1 << (n - i - 1))
+            else:
+                new_state &= ~(1 << (n - i - 1))
+        return new_state
+    return eval_int, symbols
 
 
 def get_eval_state_fn(primes: dict) -> Callable[[dict], dict]:
@@ -34,12 +57,12 @@ def get_eval_state_fn(primes: dict) -> Callable[[dict], dict]:
 
 
 def get_eval_int_fn(primes: dict) -> Callable[[int], int]:
-    aps = list(primes.keys())
+    aps = tuple(primes.keys())
     ap_index = {ap: i for i, ap in enumerate(aps)}
 
     def eval_int(state: int) -> int:
         ap_size = len(primes)
-        new_state = (2 ** ap_size - 1)
+        new_state = state
         for ap in aps:
             primes_neg, primes_true = primes[ap]
             for pr in primes_neg:
@@ -77,7 +100,22 @@ def state_to_int(state: dict, aps: list[str]) -> int:
     return result
 
 
-def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int], dict]:  # noqa: E501
+def primes_setup(primes: dict):
+    def fn():
+        eval_int = get_eval_int_fn(primes)
+        all_aps = list(primes.keys())
+        ap_index = {ap: i for i, ap in enumerate(all_aps)}
+        return eval_int, ap_index
+    return fn
+
+
+def bnet_setup(eval_int, symbols):
+    def fn():
+        return eval_int, {s.name: i for i, s in enumerate(symbols)}
+    return fn
+
+
+def get_worker_fn(setup, allow_stuttering: bool = False) -> Callable[[int], dict]:  # noqa: E501
     """Return a function that computes the transition relation for a state.
 
     The inner function encodes transitions in a DNF, DIMACS-like format.
@@ -94,9 +132,7 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
     Returns:
         Callable[[int], dict]: A worker function.
     """
-    eval_int = get_eval_int_fn(primes)
-    all_aps = list(primes.keys())
-    ap_index = {ap: i for i, ap in enumerate(all_aps)}
+    eval_int, ap_index = setup()
 
     def powerset(iterable):
         s = list(iterable)
@@ -114,8 +150,9 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
         differences = state ^ sync_next
         same = ~differences
         diff_indexes = [
-            i for i in range(len(all_aps))
-            if (differences >> (len(all_aps) - i - 1)) & 1]
+            i for i in range(len(ap_index))
+            if (differences >> (len(ap_index) - i - 1)) & 1]
+
         # When all bits change, the only possible next state is sync_next
         trel[sync_next] = [clause(diff_indexes, diff_indexes)]
 
@@ -137,7 +174,7 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
                 continue
             mask = 0
             for index in indexes:
-                mask |= (1 << (len(all_aps) - index - 1))
+                mask |= (1 << (len(ap_index) - index - 1))
             cur_next = (sync_next & ~mask) | (state & mask)
             guard = clause(indexes, diff_indexes)
             if cur_next not in trel:
@@ -148,7 +185,7 @@ def get_worker_fn(primes: dict, allow_stuttering: bool = False) -> Callable[[int
     return worker
 
 
-def get_primes(bnet_file: str) -> dict:
+def get_primes(bnet_file: str, timeout: float | None = None) -> dict:
     bnet = which("BNetToPrime")
     if bnet is None:
         bnet_path = [
@@ -162,7 +199,9 @@ def get_primes(bnet_file: str) -> dict:
             sys.exit(1)
     with tempfile.NamedTemporaryFile(suffix=".bnet", delete=False) as tmp:
         tmp.close()
-        run([str(bnet), bnet_file, tmp.name], stdout=sys.stderr, check=True)  # noqa: E501
+        run(
+            [str(bnet), bnet_file, tmp.name],
+            stdout=sys.stderr, check=True, timeout=timeout)  # noqa: E501
         print(file=sys.stderr)
         with open(tmp.name, "rb") as tmp:
             out = tmp.read().decode("utf-8").strip()
@@ -180,6 +219,9 @@ def main():
         "--allow-stuttering", action="store_true",
         help="allow stuttering transitions (default: False)")
     parser.add_argument(
+        "--primes", action="store_true",
+        help="use prime implicants only (default: False)")
+    parser.add_argument(
         '--start', type=int, action='append', default=[],
         help=(
             "specify one or more start state. "
@@ -193,8 +235,18 @@ def main():
             "Use -1 to print only the header. "
             "May be specified multiple times (default: all states)"))
     args = parser.parse_args()
-    primes = get_primes(args.bnet_file)
-    aps = tuple(primes.keys())
+
+    if args.primes:
+        primes = get_primes(args.bnet_file)
+        aps = tuple(primes.keys())
+        setup_fn = primes_setup(primes)
+    else:
+        eval_int, symbols = get_eval_int_fn_bnet(args.bnet_file)
+        aps = tuple(x.name for x in symbols)
+        setup_fn = bnet_setup(eval_int, symbols)
+
+    worker = get_worker_fn(setup_fn, allow_stuttering=args.allow_stuttering)  # noqa: E501
+
     num_states = 2 ** len(aps)
     print("HOA: v1")
     print("AP:", len(aps), " ".join(f'"{ap}"' for ap in aps))
@@ -214,7 +266,6 @@ def main():
         print("--END--")
         return
 
-    worker = get_worker_fn(primes, allow_stuttering=args.allow_stuttering)
     states = args.state if args.state else range(num_states)
     if len(states) > 2*24:
         print(

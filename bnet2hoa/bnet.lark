@@ -1,0 +1,21 @@
+%import common.WS
+
+COMMENT: /#.*/
+%ignore COMMENT
+%ignore WS
+
+bnet : function*
+
+function: IDENTIFIER "," expr
+expr : conjunction ("|" conjunction)*
+conjunction : negation ("&" negation)*
+negation : BANG* atom
+atom : IDENTIFIER
+     | FALSE
+     | TRUE
+     | "(" expr ")"
+
+BANG: "!"
+FALSE: "0"
+IDENTIFIER: /[a-zA-Z_][0-9a-zA-Z_-]*/
+TRUE: "1"
