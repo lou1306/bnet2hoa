@@ -61,7 +61,6 @@ class Bnet2Sympy(Transformer):
 
 def bnet2sympy(fname: str) -> tuple[dict, tuple]:
     grammar = resources.read_text("bnet2hoa", "bnet.lark")
-    fname = sys.argv[1]
     parser = Lark(
         grammar, start="bnet", parser="lalr", transformer=Bnet2Sympy())
     return parser.parse(open(fname).read())
