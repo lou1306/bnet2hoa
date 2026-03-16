@@ -19,7 +19,10 @@ def get_eval_int_fn_bnet(bnet_file: str) -> tuple[Callable[[int], int], tuple]:
     functions, symbols = bnet2sympy(bnet_file)
     n = len(symbols)
     compiled = {
-        target: autowrap(factors, args=symbols, backend="cython")
+        target: autowrap(
+            factors, args=symbols, backend="cython",
+            extra_compile_args=["-O3", "-Dfalse=0", "-Dtrue=1"]
+            )
         for target, factors in functions.items()}
 
     def eval_int(state: int) -> int:
@@ -126,7 +129,7 @@ def get_worker_fn(fname: os.PathLike,
         all_aps = tuple(primes.keys())
         ap_index = {ap: i for i, ap in enumerate(all_aps)}
     except TimeoutExpired:
-        eval_int, symbols = get_eval_int_fn_bnet(fname)[0]
+        eval_int, symbols = get_eval_int_fn_bnet(fname)
         ap_index = {s.name: i for i, s in enumerate(symbols)}
         all_aps = tuple(ap_index.keys())
 
@@ -235,15 +238,6 @@ def main():
     args = parser.parse_args()
 
     timeout = None if args.primes else 5
-    # if args.primes:
-    #     primes = get_primes(args.bnet_file)
-    #     aps = tuple(primes.keys())
-    #     setup_fn = primes_setup(primes)
-    # else:
-    #     eval_int, symbols = get_eval_int_fn_bnet(args.bnet_file)
-    #     aps = tuple(x.name for x in symbols)
-    #     setup_fn = bnet_setup(eval_int, symbols)
-
     worker, aps = get_worker_fn(args.bnet_file, timeout, allow_stuttering=args.allow_stuttering)  # noqa: E501
 
     num_states = 2 ** len(aps)
