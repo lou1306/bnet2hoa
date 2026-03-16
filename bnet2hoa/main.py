@@ -4,7 +4,7 @@ import sys
 import tempfile
 from importlib import resources
 from itertools import chain, combinations
-from subprocess import PIPE, run
+from subprocess import PIPE, TimeoutExpired, run
 from typing import Callable
 from shutil import which
 
@@ -100,22 +100,9 @@ def state_to_int(state: dict, aps: list[str]) -> int:
     return result
 
 
-def primes_setup(primes: dict):
-    def fn():
-        eval_int = get_eval_int_fn(primes)
-        all_aps = list(primes.keys())
-        ap_index = {ap: i for i, ap in enumerate(all_aps)}
-        return eval_int, ap_index
-    return fn
-
-
-def bnet_setup(eval_int, symbols):
-    def fn():
-        return eval_int, {s.name: i for i, s in enumerate(symbols)}
-    return fn
-
-
-def get_worker_fn(setup, allow_stuttering: bool = False) -> Callable[[int], dict]:  # noqa: E501
+def get_worker_fn(fname: os.PathLike,
+                  primes_timeout: float | None = None,
+                  allow_stuttering: bool = False) -> tuple[tuple, Callable[[int], dict]]:  # noqa: E501
     """Return a function that computes the transition relation for a state.
 
     The inner function encodes transitions in a DNF, DIMACS-like format.
@@ -126,13 +113,22 @@ def get_worker_fn(setup, allow_stuttering: bool = False) -> Callable[[int], dict
     "0" is the true constant.
 
     Args:
-        primes (dict): Prime implicant mapping (As given by BNetToPrime)
+        fname (os.PathLike): Path to the BNet file
         allow_stuttering (bool, optional): _description_. Defaults to False.
 
     Returns:
         Callable[[int], dict]: A worker function.
     """
-    eval_int, ap_index = setup()
+
+    try:
+        primes = get_primes(fname, timeout=primes_timeout)
+        eval_int = get_eval_int_fn(primes)
+        all_aps = tuple(primes.keys())
+        ap_index = {ap: i for i, ap in enumerate(all_aps)}
+    except TimeoutExpired:
+        eval_int, symbols = get_eval_int_fn_bnet(fname)[0]
+        ap_index = {s.name: i for i, s in enumerate(symbols)}
+        all_aps = tuple(ap_index.keys())
 
     def powerset(iterable):
         s = list(iterable)
@@ -182,7 +178,7 @@ def get_worker_fn(setup, allow_stuttering: bool = False) -> Callable[[int], dict
             else:
                 trel[cur_next].append(guard)
         return trel
-    return worker
+    return worker, all_aps
 
 
 def get_primes(bnet_file: str, timeout: float | None = None) -> dict:
@@ -219,7 +215,10 @@ def main():
         help="allow stuttering transitions (default: False)")
     parser.add_argument(
         "--primes", action="store_true",
-        help="use prime implicants only (default: False)")
+        help=(
+            "force use of prime implicants. " 
+            "Might take longer to compute on large networks "
+            "(default: False)"))
     parser.add_argument(
         '--start', type=int, action='append', default=[],
         help=(
@@ -235,16 +234,17 @@ def main():
             "May be specified multiple times (default: all states)"))
     args = parser.parse_args()
 
-    if args.primes:
-        primes = get_primes(args.bnet_file)
-        aps = tuple(primes.keys())
-        setup_fn = primes_setup(primes)
-    else:
-        eval_int, symbols = get_eval_int_fn_bnet(args.bnet_file)
-        aps = tuple(x.name for x in symbols)
-        setup_fn = bnet_setup(eval_int, symbols)
+    timeout = None if args.primes else 5
+    # if args.primes:
+    #     primes = get_primes(args.bnet_file)
+    #     aps = tuple(primes.keys())
+    #     setup_fn = primes_setup(primes)
+    # else:
+    #     eval_int, symbols = get_eval_int_fn_bnet(args.bnet_file)
+    #     aps = tuple(x.name for x in symbols)
+    #     setup_fn = bnet_setup(eval_int, symbols)
 
-    worker = get_worker_fn(setup_fn, allow_stuttering=args.allow_stuttering)  # noqa: E501
+    worker, aps = get_worker_fn(args.bnet_file, timeout, allow_stuttering=args.allow_stuttering)  # noqa: E501
 
     num_states = 2 ** len(aps)
     print("HOA: v1")
