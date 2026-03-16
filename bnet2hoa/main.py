@@ -4,7 +4,7 @@ import sys
 import tempfile
 from importlib import resources
 from itertools import chain, combinations
-from subprocess import run
+from subprocess import PIPE, run
 from typing import Callable
 from shutil import which
 
@@ -201,8 +201,7 @@ def get_primes(bnet_file: str, timeout: float | None = None) -> dict:
         tmp.close()
         run(
             [str(bnet), bnet_file, tmp.name],
-            stdout=sys.stderr, check=True, timeout=timeout)  # noqa: E501
-        print(file=sys.stderr)
+            stdout=PIPE, stderr=PIPE, check=True, timeout=timeout)
         with open(tmp.name, "rb") as tmp:
             out = tmp.read().decode("utf-8").strip()
         os.unlink(tmp.name)
